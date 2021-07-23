@@ -1,0 +1,179 @@
+/*{
+	"type": "action",
+	"targets": ["omnifocus"],
+	"author": "Craig Sturgis",
+	"identifier": "com.craigsturgis.of.projectToAirtable",
+	"version": "1.1.1",
+	"description": "Takes the selected project and sends it to an Airtable record while optionally setting some categorization fields",
+	"label": "Send to Airtable",
+	"shortLabel": "Send to Airtable",
+	"paletteLabel": "Send to Airtable",
+	"image": "gearshape"
+}*/
+(() => {
+
+    //airtable base url is hardcoded in this version since the request is specific to my specific base's format
+    //but you can adapt to your base's url and api format which airtable makes pretty easy to understand on their base
+    //specific api pages they generate for you
+
+    //credentials code adapted from example at https://omni-automation.com/shared/credentials.html
+
+    const airtableBaseApiUrl = "https://api.airtable.com/v0/appqzyHfIFgonVPlV/Projects";
+    const serviceTitle = "omnifocus-projects-to-airtable-record";
+
+    const credentials = new Credentials();
+
+    const requestCredentials = (postBody) => {
+		// CREATE FORM FOR GATHERING USER INPUT
+		let inputForm = new Form();
+		
+		// CREATE TEXT FIELDS		
+		const apiKeyField = new Form.Field.Password(
+			"apiKey",
+			"Airtable API Key",
+			null
+		);
+
+		// ADD THE FIELDS TO THE FORM
+		inputForm.addField(apiKeyField);
+	
+		// PRESENT THE FORM TO THE USER
+		let formPrompt = "Enter Airtable API Key";
+		let formPromise = inputForm.show(formPrompt, "Continue");
+		
+		// VALIDATE THE USER INPUT
+		inputForm.validate = formObject => {
+			let apiKey = formObject.values["apiKey"];
+			let keyStatus = (apiKey && apiKey.length > 0) ? true:false;
+			
+            //TODO: actually hit the api and make sure it authenticates
+
+			let validation = (keyStatus) ? true:false;
+
+            console.log("validation: " + validation);
+			return validation;
+		}
+
+		
+		formPromise.then(formObject => {
+			
+            console.log('form submitted');
+
+            // RETRIEVE FORM VALUES
+			let apiKey = formObject.values["apiKey"]
+
+			// STORE THE VALUES
+            try {
+			    //credentials requires a username, hard coding one
+                credentials.write(serviceTitle, 'no-username', apiKey)
+                console.log('credentials written to keychain');
+            
+			    // RETRIEVE CREDENTIALS OBJECT
+			    let credentialsObj = credentials.read(serviceTitle)
+			    // PASS CREDENTIALS TO PROCESSING FUNCTION
+                postData(credentialsObj, postBody)
+            }
+            catch(err){console.error(err.name, err.message)}
+		})
+    }
+
+    const postData = (credentialsObj, postBody) => {
+		// CONSTRUCT ENCODED CREDENTIALS STRING
+		let apiKey = credentialsObj["password"]
+
+        // console.log("api key from credentials: " + apiKey);
+
+        let request = URL.FetchRequest.fromString(airtableBaseApiUrl);
+        
+        request.method = "POST";
+        request.cache = "no-cache";
+        request.headers = {
+            "Authorization": "Bearer" + " " + apiKey,
+            "Content-Type" : "application/json",
+        };
+
+        request.bodyString = JSON.stringify(postBody);
+        console.log(JSON.stringify(postBody));
+        
+        var requestPromise = request.fetch();
+
+        requestPromise.then(response => {
+            var responseCode = response.statusCode;
+            if (responseCode >= 200 && responseCode < 300){
+                //TODO: is there a 'toast' or similar style feedback for success that is more passive than an alert?
+                new Alert(String(responseCode), "Project added successfully.").show();
+            } else {
+                console.error(JSON.stringify(response.headers));
+                console.error(response.bodyString);
+                new Alert(String(responseCode), "An error occurred.").show();
+            }
+        });
+
+	}
+
+	const action = new PlugIn.Action(function(selection, sender){
+		try {
+			// TO REMOVE CREDENTIALS HOLD DOWN CONTROL KEY WHEN SELECTING PLUG-IN
+			if (app.controlKeyDown){
+				let credentialsObj = credentials.read(serviceTitle)
+				if(!credentialsObj){
+					let alertMessage = "There is no stored Airtable API Key to remove."
+					new Alert("Missing Resource", alertMessage).show()
+				} else {
+					let alertMessage = "Remove the stored Airtable API Key?"
+					let alert = new Alert("Confirmation Required", alertMessage)
+					alert.addOption("Reset")
+					alert.addOption("Cancel")
+					alert.show(buttonIndex => {
+						if (buttonIndex === 0){
+							console.log(`Removing Service “${serviceTitle}”`)
+							credentials.remove(serviceTitle)
+							console.log(`Service “${serviceTitle}” Removed`)	
+						}
+					})
+				}
+			} else {
+				
+                const selectedProject = selection.projects[0]
+                const now = new Date();
+
+                const toISODate = (date) => {
+                    return date.getFullYear() + "-" + (date.getMonth() + 1) + "-" + date.getDate();
+                };
+
+                let postBody = {
+                    fields: {
+                        Name: selectedProject.name,
+                        //active, incubating, ongoing - focus area, ongoing - long term, someday / maybe
+                        "Project Status": "Active",
+                        //project, single action, checklist
+                        Type: "project",
+                        "Last Reviewed": toISODate(now),
+                        Created: toISODate(selectedProject.task.added),
+                        "Review after": toISODate(now),
+                    },
+                    typecast: true
+                };
+                
+                console.log('Trying to send project: ' + selectedProject.name);
+
+                let credentialsObj = credentials.read(serviceTitle)
+				if (credentialsObj){
+					postData(credentialsObj, postBody)
+				} else {
+					requestCredentials(postBody)
+				}
+			}
+		}
+		catch(err){console.error(err.name, err.message)}
+        
+	});
+
+	action.validate = function(selection, sender){
+		// validation code
+		// selection options: tasks, projects, folders, tags, allObjects
+		return (selection.projects.length === 1)
+	};
+	
+	return action;
+})();
